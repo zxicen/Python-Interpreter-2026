@@ -105,7 +105,7 @@ u64 to_u64(const Digits &a) {
 }
 
 // 转换：Digits 到字符串
-std::string to_string(bool negative, const Digits &a) {
+std::string digits_to_string(bool negative, const Digits &a) {
     if (a.empty()) {
         return "0";
     }
@@ -509,9 +509,13 @@ void int2048::read(const std::string &str) {
     }
 }
 
+std::string int2048::to_string() const {
+    return digits_to_string(negative_, digits_);
+}
+
 // 输出储存的大整数，无需换行
 void int2048::print() {
-    std::string str = to_string(negative_, digits_);
+    std::string str = to_string();
     std::fwrite(str.data(), 1, str.size(), stdout);
 }
 
@@ -526,7 +530,7 @@ std::istream &operator>>(std::istream &is, int2048 &value) {
 
 // 重载输出
 std::ostream &operator<<(std::ostream &os, const int2048 &value) {
-    return os << to_string(value.negative_, value.digits_);
+    return os << value.to_string();
 }
 
 //-----------------
