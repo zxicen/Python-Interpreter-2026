@@ -32,12 +32,14 @@ public:
 	std::any visitFactor(Python3Parser::FactorContext *ctx) override;
 	std::any visitAtom_expr(Python3Parser::Atom_exprContext *ctx) override;
 	std::any visitAtom(Python3Parser::AtomContext *ctx) override;
+	std::any visitFormat_string(Python3Parser::Format_stringContext *ctx) override;
 	std::any visitTestlist(Python3Parser::TestlistContext *ctx) override;
 
 private:
 	struct BreakValue {};
 	struct ContinueValue {};
 	static bool isTruthy(const Value &value);
+	static std::string unescape(const std::string &text, bool isFormat);
 	Value arithmetic(Value left, Value right, const std::string &op);
 	Runtime runtime_;
 };

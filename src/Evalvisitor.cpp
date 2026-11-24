@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <stdexcept>
 #include <variant>
-#include <optional>
 #include <iostream>
 
 bool EvalVisitor::isTruthy(const Value &value) {
@@ -22,6 +21,41 @@ bool EvalVisitor::isTruthy(const Value &value) {
         return *p != 0.0;
     }
     return !std::get<std::string>(value).empty();
+}
+
+std::string EvalVisitor::unescape(const std::string &text, bool isFormat) {
+    std::string result;
+    for (size_t j = 0; j < text.size(); ++j) {
+        const char current = text[j];
+        if (isFormat && (current == '{' || current == '}')) {
+            result.push_back(current);
+            ++j;
+            continue;
+        }
+        if (current != '\\') {
+            result.push_back(current);
+            continue;
+        }
+        
+        switch (text[++j]) {
+            case 'n':
+                result.push_back('\n');
+                break;
+            case 't':
+                result.push_back('\t');
+                break;
+            case '\\':
+                result.push_back('\\');
+                break;
+            case '\'':
+                result.push_back('\'');
+                break;
+            case '"':
+                result.push_back('"');
+                break;
+        }
+    }
+    return result;
 }
 
 Value EvalVisitor::arithmetic(Value left, Value right, const std::string &op) {
@@ -321,9 +355,16 @@ std::any EvalVisitor::visitComparison(Python3Parser::ComparisonContext *ctx) {
         bool comparisonResult = false;
         const bool leftIsString = std::holds_alternative<std::string>(left);
         const bool rightIsString = std::holds_alternative<std::string>(right);
+        const bool leftIsNone = std::holds_alternative<NoneValue>(left);
+        const bool rightIsNone = std::holds_alternative<NoneValue>(right);
         if (leftIsString || rightIsString) {
             if (!leftIsString || !rightIsString) {
-                comparisonResult = false;
+                if (comparators[i]->EQUALS()) {
+                    comparisonResult = false;
+                }
+                else {
+                    comparisonResult = true;
+                }
             } else {
                 const auto &leftString = std::get<std::string>(left);
                 const auto &rightString = std::get<std::string>(right);
@@ -333,6 +374,20 @@ std::any EvalVisitor::visitComparison(Python3Parser::ComparisonContext *ctx) {
                 else if (comparators[i]->GT_EQ()) comparisonResult = leftString >= rightString;
                 else if (comparators[i]->EQUALS()) comparisonResult = leftString == rightString;
                 else if (comparators[i]->NOT_EQ_2()) comparisonResult = leftString != rightString;
+            }
+        } else if(leftIsNone || rightIsNone) {
+            if (!leftIsNone || !rightIsNone) {
+                if (comparators[i]->EQUALS()) {
+                    comparisonResult = false;
+                } else {
+                    comparisonResult = true;
+                }
+            } else {
+                if (comparators[i]->EQUALS()) {
+                    comparisonResult = true;
+                } else if (comparators[i]->NOT_EQ_2()) {
+                    comparisonResult = false;
+                }
             }
         } else {
             const bool leftIsDouble = std::holds_alternative<double>(left);
@@ -452,8 +507,8 @@ std::any EvalVisitor::visitAtom_expr(Python3Parser::Atom_exprContext *ctx) {
         
         if (ctx->trailer()->arglist()) {
             const auto arguments = ctx->trailer()->arglist()->argument();
-            for (size_t i = 0; i < arguments.size(); ++i) {
-                auto *argument = arguments[i];
+            size_t positionalIndex = 0;
+            for (auto *argument : arguments) {
                 if (argument->ASSIGN()) {
                     const std::string name = argument->test(0)->getText();
                     size_t parameterIndex = 0;
@@ -462,16 +517,8 @@ std::any EvalVisitor::visitAtom_expr(Python3Parser::Atom_exprContext *ctx) {
                         ++parameterIndex;
                     }
                     boundValues[parameterIndex] = std::any_cast<Value>(visit(argument->test(1)));
-                }
-            }
-            for (size_t i = 0, j = 0; i < arguments.size(); ++i) {
-                auto *argument = arguments[i];
-                if (!argument->ASSIGN()) {
-                    while (j < boundValues.size() && boundValues[j].has_value()) {
-                        ++j;
-                    }
-                    boundValues[j] = std::any_cast<Value>(visit(argument->test(0)));
-                    ++j;
+                } else {
+                    boundValues[positionalIndex++] = std::any_cast<Value>(visit(argument->test(0)));
                 }
             }
         }
@@ -535,39 +582,31 @@ std::any EvalVisitor::visitAtom(Python3Parser::AtomContext *ctx) {
         std::string result;
         for (size_t i = 0; i < stringTokens.size(); ++i) {
             const std::string text = stringTokens[i]->getText();
-            
-            for (size_t j = 1; j + 1 < text.size(); ++j) {
-                if (text[j] != '\\') {
-                    result.push_back(text[j]);
-                    continue;
-                }
-                
-                const char next = text[++j];
-                
-                switch(next) {
-                    case 'n':
-                        result.push_back('\n');
-                        break;
-                    case 't':
-                        result.push_back('\t');
-                        break;
-                    case '\\':
-                        result.push_back('\\');
-                        break;
-                    case '\'':
-                        result.push_back('\'');
-                        break;
-                    case '"':
-                        result.push_back('"');
-                        break;
-                }
-            }
+            result += unescape(text.substr(1, text.size() - 2), false);
         }
         return Value{result};
+    }
+    if (ctx->format_string()) {
+        return visit(ctx->format_string());
     }
     if (ctx->test()) {
         return visit(ctx->test());
     }
+    return Value{NoneValue{}};
+}
+
+std::any EvalVisitor::visitFormat_string(Python3Parser::Format_stringContext *ctx) {
+    std::string result;
+    for (auto *child : ctx->children) {
+        if (auto *stringNode = dynamic_cast<antlr4::tree::TerminalNode *>(child)) {
+            if (stringNode->getSymbol()->getType() == Python3Parser::FORMAT_STRING_LITERAL) {
+                result += unescape(stringNode->getText(), true);
+            }
+        } else if (auto *exprNode = dynamic_cast<Python3Parser::TestlistContext *>(child)) {
+            result += runtime_.toString(std::any_cast<Value>(visit(exprNode)));
+        }
+    }
+    return Value{result};
 }
 
 std::any EvalVisitor::visitTestlist(Python3Parser::TestlistContext *ctx) {
